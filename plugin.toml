@@ -1,0 +1,96 @@
+id = "ios-build-library"
+name = "iOS Builds"
+description = "Indexes a staged folder of exported iOS IPA builds and shows valid and invalid entries."
+version = "0.1.0"
+kiwios_api = "1"
+license = "MIT"
+brew = []
+
+[config]
+schema = "config.schema.json"
+
+[depends]
+"native.jobs" = "1"
+"native.artifact-delivery" = "1"
+
+[permissions]
+exec = ["plutil", "ruby", "shasum", "unzip"]
+read_paths = ["~/", "/Volumes"]
+write_paths = ["~/Library/Application Support/KiwiOS/PluginData/ios-build-library"]
+
+[[checks]]
+id = "library"
+label = "Build library"
+command = ["./ios-build-library.rb", "library"]
+every = "15m"
+timeout = "2m"
+
+[[checks]]
+id = "builds"
+label = "Valid builds"
+command = ["./ios-build-library.rb", "builds"]
+timeout = "2m"
+
+[[checks]]
+id = "invalid"
+label = "Invalid builds"
+command = ["./ios-build-library.rb", "invalid"]
+timeout = "2m"
+
+[[actions]]
+id = "rescan"
+label = "Rescan library"
+confirm = false
+command = ["./ios-build-library.rb", "rescan"]
+timeout = "2m"
+lock = "library"
+
+[[actions]]
+id = "cleanup"
+label = "Clean old builds"
+confirm = true
+command = ["./ios-build-library.rb", "cleanup"]
+timeout = "2m"
+lock = "library"
+
+[[ui.pages]]
+id = "overview"
+title = "iOS Builds"
+kind = "checks"
+source = "checks"
+
+[[ui.pages]]
+id = "builds"
+title = "Builds"
+kind = "artifacts"
+source = "checks.builds"
+
+[[ui.pages]]
+id = "invalid"
+title = "Invalid Builds"
+kind = "table"
+source = "checks.invalid"
+
+[[ui.pages]]
+id = "actions"
+title = "Library work"
+kind = "actions"
+source = "actions"
+
+[[ui.pages]]
+id = "settings"
+title = "Library Folder"
+kind = "form"
+source = "config"
+
+[[ui.sidebar]]
+id = "ios-builds"
+label = "Builds"
+page = "overview"
+
+[[ui.widgets]]
+id = "library"
+title = "iOS Builds"
+kind = "stat"
+source = "checks.library"
+size = "1x1"

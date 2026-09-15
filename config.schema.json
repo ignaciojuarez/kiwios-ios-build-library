@@ -1,0 +1,35 @@
+{
+  "type": "object",
+  "title": "iOS build library",
+  "description": "Point KiwiOS at one staged folder of exported IPA builds. This is public configuration and can be saved from the web Configure dialog; saving it is enough to finish setup.",
+  "properties": {
+    "library_root": {
+      "type": "string",
+      "title": "Build library folder",
+      "description": "Absolute or ~ path whose direct children are build directories. Create a folder such as ~/iOS Builds and paste that path. KiwiOS does not offer a directory picker.",
+      "warning": "This path is not sandboxed. Anyone with KiwiOS on your tailnet can see the builds in this folder. Desktop and other home folders are allowed; only use a folder you mean to publish."
+    },
+    "sort": {
+      "type": "string",
+      "title": "Sort valid builds",
+      "description": "Order used by the valid-builds table.",
+      "enum": ["newest", "title", "version"],
+      "default": "newest"
+    },
+    "keep_days": {
+      "type": "integer",
+      "title": "Delete builds older than",
+      "description": "Clean Old Builds deletes valid build folders older than this many days. 0 keeps them by age.",
+      "enum": [0, 7, 14, 30, 90],
+      "default": 0
+    },
+    "max_gb": {
+      "type": "integer",
+      "title": "Keep library under",
+      "description": "Clean Old Builds deletes oldest valid build folders until the library is under this many gigabytes. 0 does not cap size.",
+      "enum": [0, 5, 10, 20, 50],
+      "default": 0
+    }
+  },
+  "required": ["library_root"]
+}
