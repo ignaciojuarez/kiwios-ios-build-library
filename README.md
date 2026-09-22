@@ -24,7 +24,7 @@ Optional `keep_days` and `max_gb` are used only by the confirmed **Clean old bui
     KiwiNotes.ipa
 ```
 
-`kiwios-build.json` is schema 1, strict, and must match the IPA bundle identifier, short version, and build number. The scanner does not recurse, rejects symbolic links, and never follows sidecar URLs or parent paths. Newest sort compares RFC 3339 UTC instants, including fractional seconds. Version sort compares major.minor.patch only and ignores SemVer prerelease identifiers. IPAs larger than 512 MiB, sidecars larger than 64 KiB, and oversized zip listings or Info.plist payloads are invalid.
+`kiwios-build.json` is schema 1, strict, and must match the IPA bundle identifier, short version, and build number. The scanner does not recurse, rejects symbolic links, and never follows sidecar URLs or parent paths. Newest sort compares RFC 3339 UTC instants, including fractional seconds. Version sort follows SemVer precedence, including prerelease identifiers, then compares numeric build identifiers numerically. IPAs larger than 512 MiB, sidecars larger than 64 KiB, and oversized zip listings or Info.plist payloads are invalid.
 
 ## Phone install
 

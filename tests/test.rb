@@ -141,7 +141,11 @@ Dir.mktmpdir("kiwios-ios-build-library-test") do |home|
   events, status = run_check(home, "builds", config)
   event = last_event(events)
   rows = event.dig("state", "rows")
-  raise "builds failed" unless status.success? && rows.length == 2 && rows[0]["project"] == "Kiwi Notes" && rows[0]["version"] == "1.4.0 (104)"
+  unless status.success? && rows.length == 2 && rows[0]["project"] == "Kiwi Notes" &&
+         rows[0]["description"] == "Faster sharing with offline drafts." &&
+         rows[0]["version"] == "1.4.0 (104)" && rows[0]["built"] == "2026-09-14T18:30:00Z"
+    raise "builds failed"
+  end
 
   events, status = run_check(home, "invalid", config)
   event = last_event(events)
@@ -150,6 +154,12 @@ Dir.mktmpdir("kiwios-ios-build-library-test") do |home|
   index = JSON.parse(File.read(File.join(home, "data", "index.v1.json")))
   raise "index missing relative paths" unless index["items"].all? { |item| item["relativeDir"] && item["status"] == "valid" }
   raise "index leaked absolute paths" if JSON.generate(index).include?(library)
+
+  original_id = rows.first["id"]
+  File.open(File.join(valid, "KiwiNotes.ipa"), "ab") { |file| file.write("changed") }
+  events, status = run_check(home, "builds", config)
+  changed = last_event(events).dig("state", "rows").find { |row| row["project"] == "Kiwi Notes" }
+  raise "changed IPA bytes did not change artifact identity" unless status.success? && changed && changed["id"] != original_id
 
   malformed = File.join(library, "broken-json")
   FileUtils.mkdir_p(malformed)
@@ -214,14 +224,26 @@ Dir.mktmpdir("kiwios-ios-build-library-test") do |home|
   events, status = run_check(home, "invalid", config)
   raise "absolute IPA path was accepted" unless last_event(events).dig("state", "rows").any? { |row| row["name"] == "absolute-ipa" }
 
+  invalid_semver = File.join(library, "invalid-semver")
+  FileUtils.mkdir_p(invalid_semver)
+  write_sidecar(invalid_semver, default_sidecar.merge("version" => "1.0.0-01", "ipa" => "Invalid.ipa"))
+  write_ipa(File.join(invalid_semver, "Invalid.ipa"), bundle_id: "example.kiwi-notes", version: "1.0.0-01", build: "104")
+  invalid_date = File.join(library, "invalid-date")
+  FileUtils.mkdir_p(invalid_date)
+  write_sidecar(invalid_date, default_sidecar.merge("createdAt" => "2026-02-30T00:00:00Z", "ipa" => "Invalid.ipa"))
+  write_ipa(File.join(invalid_date, "Invalid.ipa"), bundle_id: "example.kiwi-notes", version: "1.4.0", build: "104")
+  events, status = run_check(home, "invalid", config)
+  invalid_rows = last_event(events).dig("state", "rows")
+  raise "invalid SemVer prerelease was accepted" unless invalid_rows.any? { |row| row["name"] == "invalid-semver" }
+  raise "invalid RFC 3339 date was accepted" unless invalid_rows.any? { |row| row["name"] == "invalid-date" }
+
   duplicate = File.join(library, "zzz-duplicate")
   FileUtils.mkdir_p(duplicate)
   write_sidecar(duplicate, default_sidecar.merge("title" => "Duplicate", "createdAt" => "2026-05-01T00:00:00Z"))
   write_ipa(File.join(duplicate, "KiwiNotes.ipa"), bundle_id: "example.kiwi-notes", version: "1.4.0", build: "104")
   events, status = run_check(home, "invalid", config)
-  raise "duplicate identity was accepted" unless last_event(events).dig("state", "rows").any? { |row|
-    row["name"] == "zzz-duplicate" && row["reason"].include?("duplicate")
-  }
+  duplicates = last_event(events).dig("state", "rows").select { |row| row["reason"].include?("duplicate") }
+  raise "all duplicate identities were not rejected" unless duplicates.map { |row| row["name"] }.sort == ["kiwi-notes-1.4.0-104", "zzz-duplicate"]
 
   events, status = run_check(home, "builds", config)
   ids = last_event(events).dig("state", "rows").map { |row| row["id"] }
@@ -299,13 +321,17 @@ Dir.mktmpdir("kiwios-ios-build-library-test") do |home|
   write_ipa(File.join(whole, "Whole.ipa"), bundle_id: "example.whole", version: "1.0.0", build: "1", name: "Whole")
   write_sidecar(frac, default_sidecar.merge(
     "project" => "Sort", "title" => "Frac", "bundleID" => "example.frac",
-    "ipa" => "Frac.ipa", "createdAt" => "2026-03-01T00:00:00.1Z", "version" => "1.0.0", "build" => "1"
+    "ipa" => "Frac.ipa", "createdAt" => "2026-03-01T00:00:00.1Z", "version" => "1.0.0-beta.1", "build" => "1"
   ))
-  write_ipa(File.join(frac, "Frac.ipa"), bundle_id: "example.frac", version: "1.0.0", build: "1", name: "Frac")
+  write_ipa(File.join(frac, "Frac.ipa"), bundle_id: "example.frac", version: "1.0.0-beta.1", build: "1", name: "Frac")
   sort_config = write_config(home, "library_root" => sort_lib, "sort" => "newest")
   events, status = run_check(home, "builds", sort_config)
   titles = last_event(events).dig("state", "rows").map { |row| row["title"] }
   raise "fractional createdAt sort failed: #{titles.inspect}" unless status.success? && titles == ["Frac", "Whole"]
+  version_config = write_config(home, "library_root" => sort_lib, "sort" => "version")
+  events, status = run_check(home, "builds", version_config)
+  titles = last_event(events).dig("state", "rows").map { |row| row["title"] }
+  raise "SemVer prerelease sort failed: #{titles.inspect}" unless status.success? && titles == ["Whole", "Frac"]
 
   utf_lib = File.join(home, "utf8-lib")
   bad_zip = File.join(utf_lib, "bad-zip-name")
@@ -363,6 +389,18 @@ Dir.mktmpdir("kiwios-ios-build-library-test") do |home|
   huge_index = JSON.parse(File.read(File.join(home, "data", "index.v1.json")))
   huge_item = huge_index["items"].find { |item| item["relativeDir"] == "too-big" }
   raise "oversized IPA was hashed" if huge_item && huge_item["sha256"]
+
+  bounded = File.join(home, "bounded")
+  FileUtils.mkdir_p(bounded)
+  1_001.times { |index| FileUtils.mkdir_p(File.join(bounded, format("invalid-%04d", index))) }
+  bounded_config = write_config(home, "library_root" => bounded)
+  events, status = run_check(home, "library", bounded_config)
+  index_path = File.join(home, "data", "index.v1.json")
+  bounded_index = JSON.parse(File.read(index_path))
+  unless status.success? && last_event(events)["t"] == "warn" && bounded_index["truncated"] &&
+         bounded_index["items"].length <= 1_000 && File.size(index_path) <= 512 * 1024
+    raise "build index was not bounded"
+  end
 
   stale = File.join(library, "old-notes")
   FileUtils.mkdir_p(stale)

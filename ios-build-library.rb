@@ -2,6 +2,7 @@
 # frozen_string_literal: true
 
 require "digest"
+require "date"
 require "fileutils"
 require "json"
 require "open3"
@@ -13,6 +14,7 @@ class CheckError < StandardError; end
 MAX_ROWS = 100
 MAX_STATE_BYTES = 44 * 1024
 MAX_INDEX_ITEMS = 1_000
+MAX_INDEX_BYTES = 500 * 1024
 MAX_IPA_BYTES = 512 * 1024 * 1024
 MAX_SIDECAR_BYTES = 64 * 1024
 MAX_ZIP_LISTING_BYTES = 1024 * 1024
@@ -170,6 +172,14 @@ def short_text(value, limit, field)
   value
 end
 
+def semver?(value)
+  match = value.is_a?(String) && value.match(SEMVER)
+  return false unless match
+
+  prerelease = match[4]
+  !prerelease || prerelease.split(".").none? { |part| part.match?(/\A\d+\z/) && part.length > 1 && part.start_with?("0") }
+end
+
 def parse_sidecar(path)
   raw = begin
     File.binread(path, MAX_SIDECAR_BYTES + 1)
@@ -185,8 +195,13 @@ def parse_sidecar(path)
   raise CheckError, "sidecar has unknown fields" unless (data.keys - SIDECAR_KEYS).empty?
   raise CheckError, "sidecar is missing required fields" unless SIDECAR_KEYS.all? { |key| data.key?(key) }
   raise CheckError, "sidecar schema must be 1" unless data["schema"] == 1
-  raise CheckError, "version is not SemVer" unless data["version"].is_a?(String) && data["version"].match?(SEMVER)
+  raise CheckError, "version is not SemVer" unless semver?(data["version"])
   raise CheckError, "createdAt must be RFC 3339 UTC" unless data["createdAt"].is_a?(String) && data["createdAt"].match?(CREATED_AT)
+  begin
+    DateTime.rfc3339(data["createdAt"])
+  rescue ArgumentError
+    raise CheckError, "createdAt must be RFC 3339 UTC"
+  end
   raise CheckError, "bundleID is invalid" unless data["bundleID"].is_a?(String) && data["bundleID"].match?(BUNDLE_ID)
   raise CheckError, "ipa filename is invalid" unless data["ipa"].is_a?(String) && data["ipa"].match?(IPA_NAME)
 
@@ -321,8 +336,8 @@ def sort_items(items, order)
     when "title"
       [left["title"].to_s.downcase, left["relativeDir"]] <=> [right["title"].to_s.downcase, right["relativeDir"]]
     when "version"
-      comparison = semver_parts(right["version"]) <=> semver_parts(left["version"])
-      comparison.zero? ? right["build"].to_s <=> left["build"].to_s : comparison
+      comparison = compare_semver(right["version"], left["version"])
+      comparison.zero? ? compare_build(right["build"], left["build"]) : comparison
     else
       comparison = created_at_time(right["createdAt"]) <=> created_at_time(left["createdAt"])
       comparison.zero? ? left["relativeDir"] <=> right["relativeDir"] : comparison
@@ -339,10 +354,44 @@ rescue ArgumentError
   Time.at(0).utc
 end
 
-# Inventory sort uses major.minor.patch only; prerelease and +metadata are ignored.
-def semver_parts(value)
-  match = value.to_s.match(SEMVER)
-  match ? match.captures[0, 3].map(&:to_i) : [0, 0, 0]
+def compare_semver(left, right)
+  left_match = left.to_s.match(SEMVER)
+  right_match = right.to_s.match(SEMVER)
+  comparison = left_match.captures[0, 3].map(&:to_i) <=> right_match.captures[0, 3].map(&:to_i)
+  return comparison unless comparison.zero?
+
+  left_pre = left_match[4]&.split(".")
+  right_pre = right_match[4]&.split(".")
+  return 0 if left_pre.nil? && right_pre.nil?
+  return 1 if left_pre.nil?
+  return -1 if right_pre.nil?
+
+  [left_pre.length, right_pre.length].max.times do |index|
+    return -1 unless left_pre[index]
+    return 1 unless right_pre[index]
+
+    left_numeric = left_pre[index].match?(/\A\d+\z/)
+    right_numeric = right_pre[index].match?(/\A\d+\z/)
+    comparison = if left_numeric && right_numeric
+                   left_pre[index].to_i <=> right_pre[index].to_i
+                 elsif left_numeric
+                   -1
+                 elsif right_numeric
+                   1
+                 else
+                   left_pre[index] <=> right_pre[index]
+                 end
+    return comparison unless comparison.zero?
+  end
+  0
+end
+
+def compare_build(left, right)
+  if left.to_s.match?(/\A\d+\z/) && right.to_s.match?(/\A\d+\z/)
+    left.to_i <=> right.to_i
+  else
+    left.to_s <=> right.to_s
+  end
 end
 
 def scan_library
@@ -354,28 +403,25 @@ def scan_library
   rescue Errno::ENOENT, Errno::EACCES
     raise CheckError, "the build library folder cannot be read"
   end
-  children.sort.each do |name|
-    next if skip_name?(name)
-
+  children = children.reject { |name| skip_name?(name) }.sort
+  scan_truncated = children.length > MAX_INDEX_ITEMS
+  children.first(MAX_INDEX_ITEMS).each do |name|
     items << inspect_child(root, name)
   end
 
-  seen = {}
-  items.each do |item|
-    next unless item["status"] == "valid"
+  items.select { |item| item["status"] == "valid" }
+       .group_by { |item| [item["bundleID"], item["version"], item["build"]] }
+       .each_value do |duplicates|
+    next if duplicates.length == 1
 
-    key = [item["bundleID"], item["version"], item["build"]]
-    if seen[key]
-      item.replace(invalid_item(item["relativeDir"], "duplicate bundle ID, version, and build", item))
-    else
-      seen[key] = true
-    end
+    duplicates.each { |item| item.replace(invalid_item(item["relativeDir"], "duplicate bundle ID, version, and build", item)) }
   end
 
   valid = sort_items(items.select { |item| item["status"] == "valid" }, order)
   invalid = items.select { |item| item["status"] == "invalid" }
-  truncated = valid.length > MAX_INDEX_ITEMS
-  write_index(valid.first(MAX_INDEX_ITEMS) + invalid, truncated, order)
+  truncated = scan_truncated || valid.length > MAX_INDEX_ITEMS
+  index_truncated = write_index(valid.first(MAX_INDEX_ITEMS) + invalid, truncated, order)
+  truncated ||= index_truncated
   { "valid" => valid, "invalid" => invalid, "truncated" => truncated, "sort" => order }
 end
 
@@ -385,18 +431,24 @@ def write_index(items, truncated, order)
   return unless data_dir && !data_dir.empty?
 
   FileUtils.mkdir_p(data_dir, mode: 0o700)
+  truncated ||= items.length > MAX_INDEX_ITEMS
   payload = {
     "schema" => 1,
     "generatedAt" => Time.now.utc.iso8601,
     "truncated" => truncated,
     "sort" => order,
-    "items" => items.map { |item| index_record(item) }
+    "items" => items.first(MAX_INDEX_ITEMS).map { |item| index_record(item) }
   }
+  while payload["items"].any? && JSON.generate(payload).bytesize > MAX_INDEX_BYTES
+    payload["items"].pop
+    payload["truncated"] = truncated = true
+  end
   path = File.join(data_dir, INDEX_NAME)
   temporary = File.join(data_dir, ".#{INDEX_NAME}.#{Process.pid}.tmp")
   File.write(temporary, JSON.generate(payload))
   File.chmod(0o600, temporary)
   File.rename(temporary, path)
+  truncated
 end
 
 def index_record(item)
@@ -422,7 +474,7 @@ def check_library
   result = scan_library
   valid = result["valid"].length
   invalid = result["invalid"].length
-  detail = [invalid.positive? ? "#{invalid} invalid" : nil, result["truncated"] ? "library exceeds #{MAX_INDEX_ITEMS} valid builds" : nil].compact
+  detail = [invalid.positive? ? "#{invalid} invalid" : nil, result["truncated"] ? "library scan exceeds #{MAX_INDEX_ITEMS} entries" : nil].compact
   state = {
     "value" => valid,
     "unit" => valid == 1 ? "build" : "builds",
@@ -442,9 +494,10 @@ def check_builds
       "id" => item["id"],
       "project" => item["project"],
       "title" => item["title"],
+      "description" => item["description"],
       "version" => "#{item["version"]} (#{item["build"]})",
       "feature" => item["feature"],
-      "built" => item["createdAt"][0, 10]
+      "built" => item["createdAt"]
     }
   end
   warning = result["truncated"] || result["invalid"].any?
@@ -453,6 +506,7 @@ def check_builds
     [
       { "id" => "project", "label" => "Project" },
       { "id" => "title", "label" => "Title" },
+      { "id" => "description", "label" => "Description" },
       { "id" => "version", "label" => "Version" },
       { "id" => "feature", "label" => "Feature" },
       { "id" => "built", "label" => "Built" }

@@ -1,7 +1,7 @@
 id = "ios-build-library"
 name = "iOS Builds"
 description = "Indexes a staged folder of exported iOS IPA builds and shows valid and invalid entries."
-version = "0.1.0"
+version = "0.1.1"
 kiwios_api = "1"
 license = "MIT"
 brew = []
