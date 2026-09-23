@@ -241,9 +241,9 @@ Dir.mktmpdir("kiwios-ios-build-library-test") do |home|
   FileUtils.mkdir_p(duplicate)
   write_sidecar(duplicate, default_sidecar.merge("title" => "Duplicate", "createdAt" => "2026-05-01T00:00:00Z"))
   write_ipa(File.join(duplicate, "KiwiNotes.ipa"), bundle_id: "example.kiwi-notes", version: "1.4.0", build: "104")
-  events, status = run_check(home, "invalid", config)
-  duplicates = last_event(events).dig("state", "rows").select { |row| row["reason"].include?("duplicate") }
-  raise "all duplicate identities were not rejected" unless duplicates.map { |row| row["name"] }.sort == ["kiwi-notes-1.4.0-104", "zzz-duplicate"]
+  events, status = run_check(home, "builds", config)
+  duplicates = last_event(events).dig("state", "rows").select { |row| row["version"] == "1.4.0 (104)" }
+  raise "repeated build identity was rejected" unless duplicates.any? { |row| row["title"] == "Duplicate" }
 
   events, status = run_check(home, "builds", config)
   ids = last_event(events).dig("state", "rows").map { |row| row["id"] }
@@ -252,7 +252,7 @@ Dir.mktmpdir("kiwios-ios-build-library-test") do |home|
   title_config = write_config(home, "library_root" => library, "sort" => "title")
   events, status = run_check(home, "builds", title_config)
   titles = last_event(events).dig("state", "rows").map { |row| row["title"] }
-  raise "title sort failed: #{titles.inspect}" unless titles.first == "Map pins"
+  raise "title sort failed: #{titles.inspect}" unless titles == titles.sort
 
   blank = write_config(home, "sort" => "newest")
   events, status = run_check(home, "library", blank)

@@ -22,6 +22,7 @@ MAX_PLIST_BYTES = 256 * 1024
 SIDECAR_NAME = "kiwios-build.json"
 INDEX_NAME = "index.v1.json"
 SEMVER = /\A(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?\z/
+APPLE_SHORT_VERSION = /\A(?:0|[1-9]\d*)(?:\.(?:0|[1-9]\d*))?\z/
 CREATED_AT = /\A\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z\z/
 BUNDLE_ID = /\A[A-Za-z0-9][A-Za-z0-9.-]{0,126}\z/
 IPA_NAME = /\A[A-Za-z0-9._+-]+\.ipa\z/
@@ -173,11 +174,18 @@ def short_text(value, limit, field)
 end
 
 def semver?(value)
-  match = value.is_a?(String) && value.match(SEMVER)
+  match = version_match(value)
   return false unless match
 
   prerelease = match[4]
   !prerelease || prerelease.split(".").none? { |part| part.match?(/\A\d+\z/) && part.length > 1 && part.start_with?("0") }
+end
+
+def version_match(value)
+  return nil unless value.is_a?(String)
+
+  normalized = value.match?(APPLE_SHORT_VERSION) ? "#{value}#{value.include?('.') ? '.0' : '.0.0'}" : value
+  normalized.match(SEMVER)
 end
 
 def parse_sidecar(path)
@@ -195,7 +203,7 @@ def parse_sidecar(path)
   raise CheckError, "sidecar has unknown fields" unless (data.keys - SIDECAR_KEYS).empty?
   raise CheckError, "sidecar is missing required fields" unless SIDECAR_KEYS.all? { |key| data.key?(key) }
   raise CheckError, "sidecar schema must be 1" unless data["schema"] == 1
-  raise CheckError, "version is not SemVer" unless semver?(data["version"])
+  raise CheckError, "version is not an Apple short version or SemVer" unless semver?(data["version"])
   raise CheckError, "createdAt must be RFC 3339 UTC" unless data["createdAt"].is_a?(String) && data["createdAt"].match?(CREATED_AT)
   begin
     DateTime.rfc3339(data["createdAt"])
@@ -355,8 +363,8 @@ rescue ArgumentError
 end
 
 def compare_semver(left, right)
-  left_match = left.to_s.match(SEMVER)
-  right_match = right.to_s.match(SEMVER)
+  left_match = version_match(left)
+  right_match = version_match(right)
   comparison = left_match.captures[0, 3].map(&:to_i) <=> right_match.captures[0, 3].map(&:to_i)
   return comparison unless comparison.zero?
 
@@ -407,14 +415,6 @@ def scan_library
   scan_truncated = children.length > MAX_INDEX_ITEMS
   children.first(MAX_INDEX_ITEMS).each do |name|
     items << inspect_child(root, name)
-  end
-
-  items.select { |item| item["status"] == "valid" }
-       .group_by { |item| [item["bundleID"], item["version"], item["build"]] }
-       .each_value do |duplicates|
-    next if duplicates.length == 1
-
-    duplicates.each { |item| item.replace(invalid_item(item["relativeDir"], "duplicate bundle ID, version, and build", item)) }
   end
 
   valid = sort_items(items.select { |item| item["status"] == "valid" }, order)
@@ -600,12 +600,14 @@ commands = {
   "cleanup" => method(:cleanup)
 }
 
-begin
-  command = commands[ARGV.fetch(0, "")]
-  raise CheckError, "unknown iOS build-library command" unless command
+if $PROGRAM_NAME == __FILE__
+  begin
+    command = commands[ARGV.fetch(0, "")]
+    raise CheckError, "unknown iOS build-library command" unless command
 
-  command.call
-rescue CheckError => error
-  event("error", error.message)
-  exit 2
+    command.call
+  rescue CheckError => error
+    event("error", error.message)
+    exit 2
+  end
 end
