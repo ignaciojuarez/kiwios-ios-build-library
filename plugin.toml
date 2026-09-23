@@ -1,7 +1,7 @@
 id = "ios-build-library"
 name = "iOS Builds"
-description = "Private iOS build history and phone install links, with a reusable terminal and T3 build runner."
-version = "0.2.2"
+description = "Private iOS build history and phone install links, from a folder of signed artifacts."
+version = "0.3.0"
 kiwios_api = "1"
 license = "MIT"
 brew = []
