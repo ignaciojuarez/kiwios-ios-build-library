@@ -9,6 +9,7 @@ require "zlib"
 
 ROOT = File.expand_path("..", __dir__)
 SCRIPT = File.join(ROOT, "ios-build-library.rb")
+require SCRIPT
 
 def write_config(dir, values)
   path = File.join(dir, "config.json")
@@ -262,6 +263,14 @@ Dir.mktmpdir("kiwios-ios-build-library-test") do |home|
   events, status = run_check(home, "library", home_config)
   raise "home directory was accepted as the library root" unless !status.success? && last_event(events)["msg"].include?("disclosed")
 
+  Dir.mktmpdir("kiwios-library-outside") do |outside|
+    FileUtils.mkdir_p(File.join(outside, "library"))
+    File.symlink(outside, File.join(home, "escaping-parent"))
+    escaped_config = write_config(home, "library_root" => File.join(home, "escaping-parent", "library"))
+    events, status = run_check(home, "library", escaped_config)
+    raise "escaping ancestor symlink was accepted" unless !status.success? && last_event(events)["msg"].include?("disclosed")
+  end
+
   FileUtils.mkdir_p(File.join(home, "empty"))
   empty_config = write_config(home, "library_root" => File.join(home, "empty"))
   events, status = run_check(home, "library", empty_config)
@@ -409,10 +418,19 @@ Dir.mktmpdir("kiwios-ios-build-library-test") do |home|
     "version" => "0.0.1", "build" => "1", "ipa" => "Old.ipa", "createdAt" => "2020-01-01T00:00:00Z"
   ))
   write_ipa(File.join(stale, "Old.ipa"), bundle_id: "example.old", version: "0.0.1", build: "1", name: "Old")
+  protected = File.join(library, "old-with-notes")
+  FileUtils.cp_r(stale, protected)
+  File.write(File.join(protected, "notes.txt"), "Keep this file")
+  changed = File.join(library, "old-changed")
+  FileUtils.cp_r(stale, changed)
+  reviewed = inspect_child(File.realpath(library), "old-changed")
+  File.open(File.join(changed, "Old.ipa"), "ab") { |file| file.write("changed after scan") }
+  raise "changed build was deleted" if delete_build(File.realpath(library), reviewed)
   cleanup_config = write_config(home, "library_root" => library, "keep_days" => 7, "max_gb" => 0)
   events, status = run_check(home, "cleanup", cleanup_config)
   raise "cleanup failed: #{last_event(events).inspect}" unless status.success?
   raise "old build was not removed" if File.exist?(stale)
+  raise "unrelated build files were deleted" unless File.read(File.join(protected, "notes.txt")) == "Keep this file"
 end
 
 puts "ios-build-library plugin fixtures passed"

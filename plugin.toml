@@ -1,7 +1,7 @@
 id = "ios-build-library"
 name = "iOS Builds"
 description = "Private iOS build history and phone install links, from a folder of signed artifacts."
-version = "0.3.0"
+version = "0.3.1"
 kiwios_api = "1"
 license = "MIT"
 brew = []
@@ -16,7 +16,7 @@ schema = "config.schema.json"
 [permissions]
 exec = ["plutil", "ruby", "shasum", "unzip"]
 read_paths = ["~/", "/Volumes"]
-write_paths = ["~/Library/Application Support/KiwiOS/PluginData/ios-build-library"]
+write_paths = ["~/", "/Volumes"]
 
 [[checks]]
 id = "library"
