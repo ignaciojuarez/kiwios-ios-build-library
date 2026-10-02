@@ -8,6 +8,8 @@ Canonical repository: [`github.com/ignaciojuarez/kiwios-ios-build-library`](http
 
 Configure **Library Folder** to a folder you own, such as `~/iOS Builds`. The path is not sandboxed; anyone authorized to use KiwiOS on your tailnet can see the indexed builds. Scans only read completed build directories. **Clean old builds** deletes eligible directories only after confirmation.
 
+The manifest discloses writes under the home directory and `/Volumes` because confirmed cleanup removes library builds; the private index lives in `KIWIOS_DATA_DIR`. Cleanup keeps changed builds and directories containing anything besides their sidecar and named IPA. The configured folder must resolve inside the disclosed roots, including through ancestor links.
+
 ## Folder format
 
 Each direct child is an immutable build directory containing `kiwios-build.json` (schema 1) and the named signed `.ipa`. The sidecar records `project`, `title`, `description`, `version`, `build`, `feature`, `createdAt`, `bundleID`, and `ipa`. The scanner validates the sidecar and IPA together, rejects symbolic links and unsafe archives, and does not recurse into project folders.

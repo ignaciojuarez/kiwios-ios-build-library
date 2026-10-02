@@ -131,7 +131,14 @@ def configured_root
   raise CheckError, "the build library folder is a symbolic link" if status.symlink?
   raise CheckError, "the build library folder is not a directory" unless status.directory?
 
-  path
+  canonical = File.realpath(path)
+  roots = [File.realpath(ENV.fetch("HOME")), "/Volumes"]
+  unless roots.any? { |root| canonical.start_with?("#{root}/") }
+    raise CheckError, "the build library folder resolves outside the disclosed home directory and /Volumes roots"
+  end
+  canonical
+rescue Errno::ENOENT, Errno::EACCES
+  raise CheckError, "the build library folder cannot be resolved"
 end
 
 def configured_sort
@@ -585,6 +592,10 @@ def delete_build(root, item)
   path = File.join(root, name)
   status = File.lstat(path)
   return false if status.symlink? || !status.directory?
+  return false unless File.realpath(root) == root
+  # Keep directories containing files the library does not own, or changed builds.
+  return false unless item["ipa"].is_a?(String) && Dir.children(path).sort == [SIDECAR_NAME, item["ipa"]].sort
+  return false unless inspect_child(root, name) == item
 
   FileUtils.remove_entry(path)
   true
